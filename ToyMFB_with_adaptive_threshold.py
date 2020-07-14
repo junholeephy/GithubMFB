@@ -297,7 +297,6 @@ class ToyMFB(object):
         # Initialize the threshold
         if len(self.total_data) == self.Nw:
             self.offset_threshold = 0.7*np.std(self.total_data)
-            print('Threshold :', self.offset_threshold)
 
         # Data smoothing
         if len(self.total_data) >= self.Nw:
@@ -314,8 +313,10 @@ class ToyMFB(object):
 
 
 if __name__ == '__main__':
+    # Set test data
     Data_temp = pd.read_csv("C:/Users/T5402/Downloads/n1_test_500k.txt", sep=',')
     print(Data_temp.columns, '\n\n')
+
     Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'R18')]
     PadOff_X = Pad_Temp.PAD_Length_offset / 1000.0
     PadOff_Y = Pad_Temp.PAD_Width_offset / 1000.0
@@ -325,16 +326,24 @@ if __name__ == '__main__':
     test_loop = ToyMFB(Nw=15, No=20)
     test_loop.show_param()
 
-    start = time.time()
+    start = time.time()  # set start time
+
+    # Run feedback loop
     for item in test_data:
         test_loop.step(item)
-    print('\n>> time : ', time.time() - start, '(s)')
 
-    #############################################
+    print('\n>> time : ', time.time() - start, '(s)')  # print working time
 
+    # Show RMS score before & after feedback
     RMS_before_FB = np.sqrt(sum((np.array(test_data) - np.zeros(len(test_data))) ** 2) / len(test_data))
     RMS_after_FB = np.sqrt(sum((np.array(test_loop.total_data) - np.zeros(len(test_data))) ** 2) / len(test_data))
 
+    print('\n')
+    print('operation count\t: ', test_loop.operation_cnt)
+    print('RMS_before_FB\t: ', RMS_before_FB)
+    print('RMS_after_FB\t: ', RMS_after_FB)
+
+    # Plot raw data & feedback result
     fit, (ax1) = plt.subplots(nrows=1, ncols=1, figsize=(20, 4))
     ax1.grid(True)
     plt.title('RMS before FB : ' + str(RMS_before_FB) + '\n RMS after FB : ' + str(RMS_after_FB))
@@ -344,9 +353,3 @@ if __name__ == '__main__':
     ax1.legend(['Raw Data', 'After Feedback'])
 
     test_loop.draw()
-
-    # RMS 비교
-    print('\n')
-    print('operation count\t: ', test_loop.operation_cnt)
-    print('RMS_before_FB\t: ', RMS_before_FB)
-    print('RMS_after_FB\t: ', RMS_after_FB)
