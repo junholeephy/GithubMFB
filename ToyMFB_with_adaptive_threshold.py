@@ -53,43 +53,41 @@ class ToyMFB(object):
         '''
 
         # status : two status considered i.e. 'Default' & 'DidOperation'
-        self.status = 'Default' # FIXME
+        self.status = 'Default'
 
         # window size
         self.Nw = Nw  # mentioned
         self.No = No  # mentioned
         self.Ncpd = self.No + self.Nw  # window size for detecting change-point
-        self.Nstd = Nstd # mentioned
+        self.Nstd = Nstd  # mentioned
 
         # data list
-        self.total_data = [] # FIXME
-        self.data = deque([], maxlen=self.Nw) # FIXME
-        self.savgol_list = [] # FIXME
-        self.op_list = [] # FIXME
-        self.cp_list = [] # FIXME
-        self.CPD_list = [] # FIXME
+        self.total_data = []  # total data list after feedback
+        self.op_list = []  # indexes where the operation was applied
+        self.cp_list = []  # indexes of real change-points
+        self.CPD_list = []  # indexes of detected change-points
 
         # data window
-        self.window_for_average = deque([], maxlen=self.Nw)
-        self.window_for_cpd = deque([], maxlen=self.Ncpd)   # Data list for detecting change-point
-        self.window_for_compare = deque([], maxlen=self.Nw)
+        self.window = deque([], maxlen=self.Nw)  # Raw data list for calculating offset & for smoothing
+        self.window_for_cpd = deque([], maxlen=self.Ncpd)  # Raw data list for detecting change-point
+        self.window_for_compare = deque([], maxlen=self.Nw)  # Smoothed data list to compare target & current state
 
         # Target & Threshold
         self.Target = 0
         self.offset_threshold = None
 
         # Operation
-        self.operation = 0
-        self.operation_buffer = 0
-        self.operation_cnt = 0
+        self.operation = 0  # cumulative sum of feedback operation
+        self.operation_buffer = 0  # buffer of feedback operation to wait for delay
+        self.operation_cnt = 0  # number of operation
 
         # Operation Delay
         self.mean_D = 5
         self.D = None
-        self.delay = 0
+        self.delay = 0  # number of steps that have elapsed since the operation.
 
         # waiting step for reflection
-        self.wait_num = 1 # number counting for monitoring Mounter-FeedBack delay
+        self.wait_num = 1  # number counting for monitoring Mounter-FeedBack delay
 
     def _run_MeanCPD_f(self):
         '''
@@ -97,27 +95,27 @@ class ToyMFB(object):
         :return: True/False, sequence point of CP
         '''
         # BOCD 가동
-        TimeSequence = self.Ncpd # window size for detecting change-point (mentioned)
-        std = np.std(np.array(self.window_for_cpd)[:self.Nw]) # Std calculation to be input for BOCPD
+        TimeSequence = self.Ncpd  # window size for detecting change-point (mentioned)
+        std = np.std(np.array(self.window_for_cpd)[:self.Nw])  # Std calculation to be input for BOCPD
 
-        mu0 = 0    # Prior on Gaussian mean. (A parameter of normal-gamma prior distribution)
-        gamma0 = 1 # (A parameter of normal-gamma prior distribution)
-        alpha0 = 1 # (A parameter of normal-gamma prior distribution)
+        mu0 = 0  # Prior on Gaussian mean. (A parameter of normal-gamma prior distribution)
+        gamma0 = 1  # (A parameter of normal-gamma prior distribution)
+        alpha0 = 1  # (A parameter of normal-gamma prior distribution)
         beta0 = alpha0 * std ** 2  # "sqrt(beta/alpha) = std" (A parameter of normal-gamma prior distribution)
 
-        hazard = 1 / 50.0 # Hazard survival function assumes probability to be a CP for each data point.
-        message = np.array([1]) # Iterative message calculated using previously collected data.
+        hazard = 1 / 50.0  # Hazard survival function assumes probability to be a CP for each data point.
+        message = np.array([1])  # Iterative message calculated using previously collected data.
 
         Data_list = []
         RL_dist_list = []
         Temp_RL_dist = np.zeros((TimeSequence, TimeSequence))
 
-        model = NormalUnKnownMeanPrecision(mu0, gamma0, alpha0, beta0) # Data assumed be to a normal distribution.
-                                                                       # Case : Both of mean and std unknown
-                                                                       # BOCPD class called.
+        model = NormalUnKnownMeanPrecision(mu0, gamma0, alpha0, beta0)  # Data assumed be to a normal distribution.
+        # Case : Both of mean and std unknown
+        # BOCPD class called.
 
         RL = []  # Run-Length distribution initial list
-        Start = [] # Estimated Change-Point starting point
+        Start = []  # Estimated Change-Point starting point
         cp_list = [0]  # Detected Change-Point sequence saved list
 
         for ind, cont in enumerate(range(TimeSequence)):
@@ -125,11 +123,12 @@ class ToyMFB(object):
             RL_dist, new_joint = bocd_meanNstd(data_list=Data_list, model=model,
                                                hazard=hazard, Message=message)
 
-            message = new_joint # each point sequential likelihood, or numerator of RL posterior distribution.
+            message = new_joint  # each point sequential likelihood, or numerator of RL posterior distribution.
             RL_dist_list.append(RL_dist)
-            Temp_RL_dist[ind, :ind + 1] = RL_dist[1:] # RL distribution temporary saved as a element of a list
+            Temp_RL_dist[ind, :ind + 1] = RL_dist[1:]  # RL distribution temporary saved as a element of a list
 
-            RL.append(np.argmax(Temp_RL_dist[ind])) # The highest probability corresponding sequence of RL posterior distribution
+            RL.append(np.argmax(
+                Temp_RL_dist[ind]))  # The highest probability corresponding sequence of RL posterior distribution
             Start.append((ind, ind - RL[-1]))
 
             if ind >= 1:
@@ -137,7 +136,7 @@ class ToyMFB(object):
                     if max(cp_list) > ind - RL[-1]:
                         cp_list = cp_list[:-1]  # Remove the lastly added Change-Point
                     else:
-                        cp_list.append(ind - RL[-1]) # Change-point Detected and append into the list
+                        cp_list.append(ind - RL[-1])  # Change-point Detected and append into the list
 
         if not cp_list:  # if no FeedBack operation application found
             return False, None
@@ -155,15 +154,14 @@ class ToyMFB(object):
         '''
         is_target = False
 
-        # 최근 Nw개 EMA가 모두 같은 부호일 것.
+        # Last Nw smoothed data must be the same sign
         check = 0
         for ema in self.window_for_compare:
             check += np.sign(ema)
         if np.abs(check) != self.Nw:
             is_target = True
-            return is_target
 
-        # 최근 Nw 개 EMA가 모두 threshold를 벗어나야 함.
+        # Last Nw smoothed data must be out of threshold.
         for ema in self.window_for_compare:
             if np.abs(ema - self.Target) <= self.offset_threshold:
                 is_target = True
@@ -175,21 +173,22 @@ class ToyMFB(object):
         Apply operation & Set operation delay
         OUTPUT : None
         '''
-        self.operation_cnt += 1
+        self.operation_cnt += 1  # number of operations
 
-        self.D = round(np.random.exponential(scale=self.mean_D))  # 딜레이 평균 5 exp.dist.
-        self.delay = 0
+        self.D = round(np.random.exponential(scale=self.mean_D))  # random delay : exp.dist. with mean 5
+        self.delay = 0  # reset self.delay
 
-        # anomaly 제외
-        buffer = self.window_for_average
+        # exclude anomaly before calculating offset by using Hotelling's T2
+        buffer = self.window
         anomaly = HotellingT2(buffer)
         for cnt, ind in enumerate(anomaly):
             del buffer[ind - cnt]
 
+        # calculate offset & operation
         offset = np.mean(buffer)
         self.operation_buffer = self.Target - offset
 
-        # operation 명령 위치 저장
+        # append operation index
         self.op_list.append(len(self.total_data))
 
     def step(self, feature):
@@ -202,11 +201,11 @@ class ToyMFB(object):
         if self.status == 'Default':
             self._put_feature(feature)
 
-            # enough data ?
+            # Enough data ?
             if len(self.total_data) < self.Nw:
                 return
 
-            # is on target?
+            # Is on target? If not, do operation.
             if self._is_on_target():
                 return
             else:
@@ -247,31 +246,30 @@ class ToyMFB(object):
         Draw figures
         :return: None
         '''
-        # total data
-        fit, (ax2) = plt.subplots(nrows=1, ncols=1, figsize=(20, 4))
-        ax2.grid(True)
+        # Plot total data & operation index & cp index
+        fit, (ax1) = plt.subplots(nrows=2, ncols=1, figsize=(20, 8))
+        ax1[0].grid(True)
         for ind in self.op_list:
-            ax2.axvline(ind, linestyle='--', color='g')
+            ax1[0].axvline(ind, linestyle='--', color='g')
         for ind in self.cp_list:
-            ax2.axvline(ind, linestyle=':', color='b')
-        ax2.plot(self.total_data)
-        ax2.axhline(0, linestyle='--', color='grey')
+            ax1[0].axvline(ind, linestyle=':', color='b')
+        ax1[0].plot(self.total_data)
+        ax1[0].axhline(0, linestyle='--', color='grey')
         legend_elements = [Line2D([0], [0], color='green', lw=2, label='Operation'),
                            Line2D([0], [0], color='blue', lw=2, label='After Delay')]
         plt.legend(handles=legend_elements)
 
-        # CPD
-        fit, (ax3) = plt.subplots(nrows=1, ncols=1, figsize=(20, 4))
-        ax3.plot(self.total_data)
-        ax3.grid(True)
-        ax3.axhline(0, linestyle='--', color='grey')
+        # Plot total data & detected cp index
+        ax1[1].plot(self.total_data)
+        ax1[1].grid(True)
+        ax1[1].axhline(0, linestyle='--', color='grey')
         for ind in self.op_list:
-            ax3.axvline(ind - self.Nw, linestyle='--', color='black')
+            ax1[1].axvline(ind - self.Nw, linestyle='--', color='black')
         for ind in self.op_list:
             if ind + self.No < len(self.total_data):
-                ax3.axvline(ind + self.No, linestyle='--', color='grey')
+                ax1[1].axvline(ind + self.No, linestyle='--', color='grey')
         for ind in self.CPD_list:
-            ax3.axvline(ind, linestyle='--', color='r', linewidth=1)
+            ax1[1].axvline(ind, linestyle='--', color='r', linewidth=1)
         plt.title('CPD-f result')
         legend_elements = [Line2D([0], [0], color='red', lw=2, label='CP After Op.')]
         plt.legend(handles=legend_elements)
@@ -282,35 +280,43 @@ class ToyMFB(object):
         :param feature: offset data
         :return: None
         '''
+
+        # Apply operation after delay D
         if self.delay == self.D:
             self.operation += self.operation_buffer
             self.cp_list.append(len(self.total_data))
+
         feature += self.operation
         self.delay += 1
 
+        # Append feature to data lists
         self.total_data.append(feature)
-        self.data.append(feature)
-        self.window_for_average.append(feature)
+        self.window.append(feature)
         self.window_for_cpd.append(feature)
 
+        # Initialize the threshold
         if len(self.total_data) == self.Nw:
-            self.offset_threshold = np.std(self.total_data)
+            self.offset_threshold = 0.7*np.std(self.total_data)
             print('Threshold :', self.offset_threshold)
 
+        # Data smoothing
         if len(self.total_data) >= self.Nw:
-            savgol_result = savgol_filter(self.data, 15, 3)
+            savgol_result = savgol_filter(self.window, 15, 3)
             self.window_for_compare = savgol_result[-self.Nw:]
 
+        # Reset the threshold
         if len(self.CPD_list) != 0:
-            if (len(self.total_data)-self.CPD_list[-1]) % self.Nstd == 0:
-                if 0.7*self.offset_threshold > np.std(self.total_data[-self.Nstd:]) or self.offset_threshold < 0.7*np.std(self.total_data[-self.Nstd:]):
-                    self.offset_threshold = 0.7*np.std(self.total_data[-self.Nstd:])
+            if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
+                if 0.7 * self.offset_threshold > np.std(
+                        self.total_data[-self.Nstd:]) or self.offset_threshold < 0.7 * np.std(
+                        self.total_data[-self.Nstd:]):
+                    self.offset_threshold = 0.7 * np.std(self.total_data[-self.Nstd:])
 
 
 if __name__ == '__main__':
-    Data_temp = pd.read_csv("C:/Users/junho.lee/Desktop/Self_Code/MFBsimulator/n1_test_500k.txt", sep=',')
+    Data_temp = pd.read_csv("C:/Users/T5402/Downloads/n1_test_500k.txt", sep=',')
     print(Data_temp.columns, '\n\n')
-    Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'SW3')]
+    Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'R18')]
     PadOff_X = Pad_Temp.PAD_Length_offset / 1000.0
     PadOff_Y = Pad_Temp.PAD_Width_offset / 1000.0
     PadOff_A = Pad_Temp.PAD_Angle_offset / 1000.0
