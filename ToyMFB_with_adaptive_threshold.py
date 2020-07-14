@@ -45,7 +45,7 @@ def HotellingT2(window):
 
 
 class ToyMFB(object):
-    def __init__(self, Nw=10, No=20, Nstd=30):
+    def __init__(self, Nw=15, No=20, Nstd=30):
         '''
         :param Nw: window size for outlier
         :param No: window for waiting Mounter-FeedBack (MFB) reflection
@@ -296,20 +296,20 @@ class ToyMFB(object):
 
         # Initialize the threshold
         if len(self.total_data) == self.Nw:
-            self.offset_threshold = 0.7*np.std(self.total_data)
+            self.offset_threshold = 0.5 * np.std(self.total_data)
 
         # Data smoothing
         if len(self.total_data) >= self.Nw:
-            savgol_result = savgol_filter(self.window, 15, 3)
+            savgol_result = savgol_filter(self.total_data[-self.Nw:], self.Nw, 3)
             self.window_for_compare = savgol_result[-self.Nw:]
 
         # Reset the threshold
         if len(self.CPD_list) != 0:
             if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
                 if 0.7 * self.offset_threshold > np.std(
-                        self.total_data[-self.Nstd:]) or self.offset_threshold < 0.7 * np.std(
-                        self.total_data[-self.Nstd:]):
-                    self.offset_threshold = 0.7 * np.std(self.total_data[-self.Nstd:])
+                        self.total_data[-self.Nstd:]) or self.offset_threshold < 0.5 * np.std(
+                    self.total_data[-self.Nstd:]):
+                    self.offset_threshold = 0.5 * np.std(self.total_data[-self.Nstd:])
 
 
 if __name__ == '__main__':
