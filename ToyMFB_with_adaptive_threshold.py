@@ -1,11 +1,13 @@
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from statsmodels.tsa.stattools import adfuller, kpss
 import matplotlib.pyplot as plt
 import scipy
 import statsmodels
 from collections import deque, Counter
 from scipy.signal import savgol_filter
+from scipy.stats.mstats import theilslopes
 from collections import deque
 from matplotlib.lines import Line2D
 import time
@@ -15,7 +17,7 @@ from BOCD import bocd, NormalUnKnownMeanPrecision
 
 
 def HotellingT2(window):
-    alpha = 0.05
+    alpha = 0.01
     p = 1
     m = len(window)
     q = 2 * (m - 1) ** 2 / (3 * m - 4)
@@ -65,7 +67,8 @@ class ToyMFB(object):
         self.total_data = []  # total data list after feedback
         self.op_list = []  # indexes where the operation was applied
         self.cp_list = []  # indexes of real change-points
-        self.CPD_list = []  # indexes of detected change-points
+        self.CPD_list = [0]  # indexes of detected change-points
+        self.sub_op_list = []  # indexes where the operation was applied
 
         # data window
         self.window = deque([], maxlen=self.Nw)  # Raw data list for calculating offset & for smoothing
@@ -80,6 +83,7 @@ class ToyMFB(object):
         self.operation = 0  # cumulative sum of feedback operation
         self.operation_buffer = 0  # buffer of feedback operation to wait for delay
         self.operation_cnt = 0  # number of operation
+        self.sub_operation_cnt = 0  # number of sub operation
 
         # Operation Delay
         self.mean_D = 5
@@ -154,16 +158,16 @@ class ToyMFB(object):
         '''
         is_target = False
 
-        # Last Nw smoothed data must be the same sign
+        # Outlier : Last Nw smoothed data must be the same sign
         check = 0
-        for ema in self.window_for_compare:
-            check += np.sign(ema)
+        for smoothed in self.window_for_compare:
+            check += np.sign(smoothed)
         if np.abs(check) != self.Nw:
             is_target = True
 
-        # Last Nw smoothed data must be out of threshold.
-        for ema in self.window_for_compare:
-            if np.abs(ema - self.Target) <= self.offset_threshold:
+        # Outlier : Last Nw smoothed data must be out of threshold.
+        for smoothed in self.window_for_compare:
+            if np.abs(smoothed - self.Target) <= self.offset_threshold:
                 is_target = True
 
         return is_target
@@ -174,8 +178,10 @@ class ToyMFB(object):
         OUTPUT : None
         '''
         self.operation_cnt += 1  # number of operations
+        self.sub_operation_cnt = 0
 
         self.D = round(np.random.exponential(scale=self.mean_D))  # random delay : exp.dist. with mean 5
+        self.D = 0
         self.delay = 0  # reset self.delay
 
         # exclude anomaly before calculating offset by using Hotelling's T2
@@ -190,6 +196,31 @@ class ToyMFB(object):
 
         # append operation index
         self.op_list.append(len(self.total_data))
+
+    def _do_sub_operation(self):
+        '''
+        Apply sub-operation & Set sub-operation delay
+        OUTPUT : None
+        '''
+        #         self.operation_cnt += 1  # number of operations
+        self.sub_operation_cnt += 1  # number of sub operations
+
+        self.D = round(np.random.exponential(scale=self.mean_D))  # random delay : exp.dist. with mean 5
+        self.D = 0
+        self.delay = 0  # reset self.delay
+
+        # exclude anomaly before calculating offset by using Hotelling's T2
+        buffer = self.total_data[self.CPD_list[-1]:]
+        anomaly = HotellingT2(buffer)
+        for cnt, ind in enumerate(anomaly):
+            del buffer[ind - cnt]
+
+        # calculate offset & operation
+        offset = np.mean(buffer)
+        self.operation_buffer = self.Target - offset
+
+        # append operation index
+        self.sub_op_list.append(len(self.total_data))
 
     def step(self, feature):
         '''
@@ -207,6 +238,9 @@ class ToyMFB(object):
 
             # Is on target? If not, do operation.
             if self._is_on_target():
+                if self.sub_operation_cnt == 0 and (len(self.total_data) - self.CPD_list[-1]) >= 15:
+                    if adfuller(self.total_data[self.CPD_list[-1]:])[1] < 1e-6:
+                        self._do_sub_operation()
                 return
             else:
                 self._do_operation()
@@ -251,6 +285,8 @@ class ToyMFB(object):
         ax1[0].grid(True)
         for ind in self.op_list:
             ax1[0].axvline(ind, linestyle='--', color='g')
+        for ind in self.sub_op_list:
+            ax1[0].axvline(ind, linestyle=':', color='r')
         for ind in self.cp_list:
             ax1[0].axvline(ind, linestyle=':', color='b')
         ax1[0].plot(self.total_data)
@@ -268,7 +304,7 @@ class ToyMFB(object):
         for ind in self.op_list:
             if ind + self.No < len(self.total_data):
                 ax1[1].axvline(ind + self.No, linestyle='--', color='grey')
-        for ind in self.CPD_list:
+        for ind in self.CPD_list[1:]:
             ax1[1].axvline(ind, linestyle='--', color='r', linewidth=1)
         plt.title('CPD-f result')
         legend_elements = [Line2D([0], [0], color='red', lw=2, label='CP After Op.')]
@@ -284,7 +320,7 @@ class ToyMFB(object):
         # Apply operation after delay D
         if self.delay == self.D:
             self.operation += self.operation_buffer
-            self.cp_list.append(len(self.total_data))
+        #             self.cp_list.append(len(self.total_data))
 
         feature += self.operation
         self.delay += 1
@@ -297,6 +333,7 @@ class ToyMFB(object):
         # Initialize the threshold
         if len(self.total_data) == self.Nw:
             self.offset_threshold = 0.5 * np.std(self.total_data)
+            print(len(self.total_data), '\t', (self.offset_threshold))
 
         # Data smoothing
         if len(self.total_data) >= self.Nw:
@@ -304,12 +341,16 @@ class ToyMFB(object):
             self.window_for_compare = savgol_result[-self.Nw:]
 
         # Reset the threshold
-        if len(self.CPD_list) != 0:
-            if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
-                if 0.7 * self.offset_threshold > np.std(
-                        self.total_data[-self.Nstd:]) or self.offset_threshold < 0.5 * np.std(
-                    self.total_data[-self.Nstd:]):
-                    self.offset_threshold = 0.5 * np.std(self.total_data[-self.Nstd:])
+        if len(self.cp_list) != 0:
+            if (len(self.total_data) - self.cp_list[-1]) % self.Nstd == 0:
+                buffer = self.total_data[-self.Nstd:]
+                #                 slope = theilslopes(buffer, alpha = 0.99)[0]
+                slope = 0
+
+                buffer = [buffer[i] - slope * i for i in range(self.Nstd)]
+
+                if 0.7 * self.offset_threshold > np.std(buffer) or self.offset_threshold < 0.7 * np.std(buffer):
+                    self.offset_threshold = 0.5 * np.std(buffer)
 
 
 if __name__ == '__main__':
@@ -317,14 +358,17 @@ if __name__ == '__main__':
     Data_temp = pd.read_csv("C:/Users/T5402/Downloads/n1_test_500k.txt", sep=',')
     print(Data_temp.columns, '\n\n')
 
-    Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'R18')]
+    Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'SW3')]
     PadOff_X = Pad_Temp.PAD_Length_offset / 1000.0
     PadOff_Y = Pad_Temp.PAD_Width_offset / 1000.0
     PadOff_A = Pad_Temp.PAD_Angle_offset / 1000.0
 
-    test_data = np.array(PadOff_Y[:])
+    test_data = np.array(PadOff_X[:])
     test_loop = ToyMFB(Nw=15, No=20)
     test_loop.show_param()
+
+    #     test_data = [test_data[i]+i for i in range(300)]+[test_data[i+300]-2*i+300 for i in range(200)]
+    test_data = [test_data[i] + 1 * i for i in range(200)]
 
     start = time.time()  # set start time
 
