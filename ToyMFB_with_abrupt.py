@@ -13,6 +13,9 @@ from BOCD import bocd_meanNstd, NormalUnKnownMeanPrecision
 def HotellingT2(window):
     '''
     Find indexes of anomaly using Hotelling T-square method
+    calculate T2 score for each point & compare with calculated Upper-confidence-level.
+    if exceed, anomaly
+
     :param window: data list
     :return: indexes of anomaly
     '''
@@ -64,16 +67,16 @@ class ToyMFB(object):
         self.Nstd = Nstd  # mentioned
 
         # data list
-        self.total_data = []  # total data list after feedback
-        self.op_list = [0]  # indexes where the operation was applied
-        self.cp_list = [0]  # indexes of real change-points
+        self.total_data = []  # total data list (FB applied list : collected data list if online production)
+        self.op_list = [0]  # indexes where operation were applied
+        self.cp_list = [0]  # indexes of machine applied real change-points
         self.CPD_list = [0]  # indexes of detected change-points
         self.bocd_f_ind_list = [0]  # indexes of CPD fired points
-        self.sub_op_list = [0]  # indexes where the operation was applied
+        self.sub_op_list = [0]  # indexes where the sub-operation was applied
 
         # data window
-        self.window = deque([], maxlen=self.Nw)  # Raw data list for calculating offset & for smoothing
-        self.window_for_compare = deque([], maxlen=self.Nw)  # Smoothed data list to compare target & current state
+        self.window = deque([], maxlen=self.Nw)  # Raw data list for calculating offset & for smoothing (Nw data)
+        self.window_for_compare = deque([], maxlen=self.Nw)  # Smoothed data list to compare threshold & current state
 
         # Target & Threshold
         self.Target = 0
@@ -83,7 +86,7 @@ class ToyMFB(object):
         self.operation = 0  # cumulative sum of feedback operation
         self.operation_buffer = 0  # buffer of feedback operation to wait for delay
         self.operation_cnt = 0  # number of operation
-        self.sub_operation = False  # number of sub-operation
+        self.sub_operation = False  # where or not already applied sub-operation, as sub-op applied only once right after CPD
 
         # Operation Delay
         self.mean_D = 5  # mean operation delay
@@ -235,28 +238,28 @@ class ToyMFB(object):
             self._put_feature(feature)
 
             # Enough data ?
-            if len(self.total_data) - self.CPD_list[-1] < self.Nw:
+            if len(self.total_data) - self.CPD_list[-1] < self.Nw: #FIXME index issue
                 return
 
             # State on target? If not, do operation.
             if self._is_on_target():
                 # If state is on target & stable, do one sub-operation.
-                if not self.sub_operation:
-                    check_point = max(self.CPD_list[-1], self.op_list[-1])
-                    if (len(self.total_data) - check_point) >= self.Nw:  # There must be enough data after Op. or CPD.
+                if not self.sub_operation: # "False" if not done the sub operation
+                    check_point = max(self.CPD_list[-1], self.op_list[-1]) #'op_list':not considered delay operation list, 'CPD_list': BOCPD found CPD index list
+                    if (len(self.total_data) - check_point) >= self.Nw:  # There must be enough data after Op. or CPD. FIXME index issue
                         if adfuller(self.total_data[check_point:])[1] < 1e-6:  # Stable?
                             self._do_sub_operation()
                 return
             else:
-                self._do_operation()
-                self.estimator = stats.gaussian_kde(self.window)  # Set Gaussian KDE for Abrupt CPD.
+                self._do_operation()  # SG-filter smoothing is not consider anomaly # FIXME
+                self.estimator = stats.gaussian_kde(self.window)  # Set Gaussian KDE for Abrupt CPD.   # FIXME : minimum of delay given, then calculate the estimator
                 self.status = 'DidOperation'
                 return
 
         # Waiting for results to be reflected.
         if self.status == 'DidOperation':
             self._put_feature(feature)
-            self.wait_num += 1
+            self.wait_num += 1 # FIXME index issue 
 
             # Abrupt CPD : repeating low p-value point or waiting enough fires BOCD
             if self.estimator.integrate_box_1d(-np.Inf, self.total_data[-1]) < self.p or \
@@ -348,7 +351,7 @@ class ToyMFB(object):
         self.window.append(feature)     # Nw corresponding window size
 
         # Initialize the threshold
-        if len(self.total_data) == self.Nstd:   # use once at the initial stage
+        if len(self.total_data) == self.Nstd:   # FIXME use once at the initial stage (put outside of the state stage)
             self.offset_threshold = 0.7 * np.std(self.total_data)
 
         # Data smoothing
@@ -357,7 +360,7 @@ class ToyMFB(object):
             self.window_for_compare = savgol_result  ## compare threshold with sg-filter regressed line
 
         # Reset the threshold
-        if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
+        if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:  ## FIXME index issue
             buffer = self.total_data[-self.Nstd:]
             if 0.7 * self.offset_threshold > np.std(buffer) or self.offset_threshold < 0.7 * np.std(buffer):
                 self.offset_threshold = 0.7 * np.std(buffer)
