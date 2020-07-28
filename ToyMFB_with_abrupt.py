@@ -344,24 +344,23 @@ class ToyMFB(object):
         self.delay += 1
 
         # Append feature to data lists
-        self.total_data.append(feature)
-        self.window.append(feature)
+        self.total_data.append(feature) # Collected total data
+        self.window.append(feature)     # Nw corresponding window size
 
         # Initialize the threshold
-        if len(self.total_data) == self.Nw:
+        if len(self.total_data) == self.Nstd:   # use once at the initial stage
             self.offset_threshold = 0.7 * np.std(self.total_data)
 
         # Data smoothing
         if len(self.total_data) >= self.Nw:
             savgol_result = savgol_filter(self.total_data[-self.Nw:], 2*floor((self.Nw-1)/2)+1, 3)
-            self.window_for_compare = savgol_result
+            self.window_for_compare = savgol_result  ## compare threshold with sg-filter regressed line
 
         # Reset the threshold
-        if len(self.CPD_list) != 0:
-            if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
-                buffer = self.total_data[-self.Nstd:]
-                if 0.7 * self.offset_threshold > np.std(buffer) or self.offset_threshold < 0.7 * np.std(buffer):
-                    self.offset_threshold = 0.7 * np.std(buffer)
+        if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:
+            buffer = self.total_data[-self.Nstd:]
+            if 0.7 * self.offset_threshold > np.std(buffer) or self.offset_threshold < 0.7 * np.std(buffer):
+                self.offset_threshold = 0.7 * np.std(buffer)
 
 
 if __name__ == '__main__':
