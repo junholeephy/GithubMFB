@@ -51,14 +51,14 @@ def HotellingT2(window):
 class ToyMFB(object):
     def __init__(self, Nw=15, Nomin=3, Nomax=20, Nstd=15):
         '''
-        :param Nw: window size for outlier
-        :param Nomin: min window size for waiting Mounter-FeedBack (MFB) reflection
-        :param Nomax: max window size for waiting Mounter-FeedBack (MFB) reflection
+        :param Nw: window size to be check if smoothed line lies outside of calculated threshold
+        :param Nomin: min window size for waiting Mounter-FeedBack (MFB) applied due to delay
+        :param Nomax: max window size for waiting Mounter-FeedBack (MFB) applied due to delay
         :param Nstd: window size for updating std.
         '''
 
-        # status : two status considered i.e. 'Default' & 'DidOperation'
-        self.status = 'Default'
+        # status : two status considered i.e. 'noFBapplied' & 'FBapplied'
+        self.status = 'noFBapplied'
 
         # window size
         self.Nw = Nw  # mentioned
@@ -68,7 +68,7 @@ class ToyMFB(object):
 
         # data list
         self.total_data = []  # total data list (FB applied list : collected data list if online production)
-        self.op_list = [0]  # indexes where operation were applied
+        self.op_list = [0]  # indexes where operation were applied (not considered delay operation list)
         self.cp_list = [0]  # indexes of machine applied real change-points
         self.CPD_list = [0]  # indexes of detected change-points
         self.bocd_f_ind_list = [0]  # indexes of CPD fired points
@@ -94,12 +94,12 @@ class ToyMFB(object):
         self.delay = 0  # number of steps that have elapsed since the operation.
 
         # waiting step for reflection
-        self.wait_num = 1  # number counting for monitoring Mounter-FeedBack delay
+        self.wait_num = 1  # counting number for monitoring Mounter-FeedBack delay
         self.abrupt_num = 1  # number counting low p-value point for Abrupt CPD
-        self.p = 0.05  # p-value limit for Abrupt CPD
-        self.estimator = None  # Gaussian KDE for Abrupt CPD
+        self.p = 0.05  # respective lower & upper p-value for Abrupt CPD
+        self.estimator = None  # Gaussian KDE for Abrupt CPD => p-value calculated based on the Gaussian KDE regressed distribution
 
-    def _run_MeanCPD_f(self):
+    def _run_CPD(self):
         '''
         Check if change has occurred in the latest (No + Nw) data
         :return: True/False, sequence point of CP
@@ -107,14 +107,14 @@ class ToyMFB(object):
         # BOCD 가동
         TimeSequence = self.Nw + len(self.total_data) - self.op_list[-1]  # window size for detecting change-point
 
-        std = np.std(np.array(self.total_data[-TimeSequence:][:self.Nw]))  # Std calculation to be input for BOCPD
+        std = np.std(np.array(self.total_data[-TimeSequence:][:self.Nw]))  # Std calculation for BOCPD FIXME (:self.Nw)
 
         mu0 = 0  # Prior on Gaussian mean. (A parameter of normal-gamma prior distribution)
         gamma0 = 1  # (A parameter of normal-gamma prior distribution)
         alpha0 = 1  # (A parameter of normal-gamma prior distribution)
         beta0 = alpha0 * std ** 2  # "sqrt(beta/alpha) = std" (A parameter of normal-gamma prior distribution)
 
-        hazard = 1 / 50.0  # Hazard survival function assumes probability to be a CP for each data point.
+        hazard = 1 / 50.0  # Hazard survival function assumes probability to be a CP for each data point. #FIXME (1/20.0 ??)
         message = np.array([1])  # Iterative message calculated using previously collected data.
 
         Data_list = []
@@ -149,7 +149,7 @@ class ToyMFB(object):
                     else:
                         cp_list.append(ind - RL[-1])  # Change-point Detected and append into the list
 
-        if not cp_list:  # If no FeedBack operation application found
+        if not cp_list:  # If no FeedBack candidate found
             return False, None
         elif cp_list[-1] < self.Nw:  # Exclude a CP ahead of FeedBack operation applied sequence
             return False, None
@@ -158,27 +158,33 @@ class ToyMFB(object):
                 self.CPD_list.append(len(self.total_data) - TimeSequence + cp_list[-1])
             return True, cp_list[-1]
 
-    def _is_on_target(self):
+    def _is_within_threshold(self):
         '''
         Check if the smoothed data is inside the threshold
-        :return: True/ False
+        :return: True/ False ('True' if data lies within threshold )
         '''
-        is_target = False
+        is_withinThreshold = False
 
         # Outlier : Last Nw smoothed data must be the same sign
+        '''
         check = 0
         for smoothed in self.window_for_compare:
             check += np.sign(smoothed)
 
         if np.abs(check) != self.Nw:
-            is_target = True
+            is_withinThreshold = True  
+        '''
+        check = np.sign(self.window_for_compare[0])
+        for smoothed in self.window_for_compare:
+            if(check != np.sign(smoothed)):
+                is_withinThreshold = True; break; #FIXME (Non-same-sign which is anomaly ??)
 
         # Outlier : Last Nw smoothed data must be out of threshold.
         for smoothed in self.window_for_compare:
             if np.abs(smoothed - self.Target) <= self.offset_threshold:
-                is_target = True
+                is_withinThreshold = True
 
-        return is_target
+        return is_withinThreshold
 
     def _do_operation(self):
         '''
@@ -192,13 +198,13 @@ class ToyMFB(object):
         self.delay = 0  # Reset self.delay
 
         # Exclude anomaly before calculating offset by using Hotelling's T2
-        buffer = self.window
-        anomaly = HotellingT2(buffer)
-        for cnt, ind in enumerate(anomaly):
-            del buffer[ind - cnt]
+        windowForAnomaly = self.window
+        anomaly = HotellingT2(windowForAnomaly)
+        for cnt, ind in enumerate(anomaly): # FIXME (cnt & ind ?)
+            del windowForAnomaly[ind - cnt] # windowForAnomaly : Anomaly excluded window 
 
         # Calculate offset & operation
-        offset = np.mean(buffer)
+        offset = np.mean(windowForAnomaly)
         self.operation_buffer = self.Target - offset
 
         # Append operation index
@@ -215,17 +221,18 @@ class ToyMFB(object):
         self.delay = 0  # Reset self.delay
 
         # Exclude anomaly before calculating offset by using Hotelling's T2
-        buffer = self.total_data[max(self.CPD_list[-1], self.op_list[-1]):]
-        anomaly = HotellingT2(buffer)
-        for cnt, ind in enumerate(anomaly):
-            del buffer[ind - cnt]
+        windowForAnomaly = self.total_data[max(self.CPD_list[-1], self.op_list[-1]):]
+        anomaly = HotellingT2(windowForAnomaly)
+        for cnt, ind in enumerate(anomaly): # FIXME (cnt & ind ?)
+            del windowForAnomaly[ind - cnt] # windowForAnomaly : Anomaly excluded window
 
         # Calculate offset & operation
-        offset = np.mean(buffer)
+        offset = np.mean(windowForAnomaly)
         self.operation_buffer = self.Target - offset
 
         # Append sub-operation index
         self.sub_op_list.append(len(self.total_data))
+
 
     def step(self, feature):
         '''
@@ -234,18 +241,18 @@ class ToyMFB(object):
         :return: None
         '''
         # START
-        if self.status == 'Default':
+        if self.status == 'noFBapplied':
             self._put_feature(feature)
 
             # Enough data ?
             if len(self.total_data) - self.CPD_list[-1] < self.Nw: #FIXME index issue
                 return
 
-            # State on target? If not, do operation.
-            if self._is_on_target():
+            # Check if lies within calculated threshold. If not, do operation.
+            if self._is_within_threshold():
                 # If state is on target & stable, do one sub-operation.
-                if not self.sub_operation: # "False" if not done the sub operation
-                    check_point = max(self.CPD_list[-1], self.op_list[-1]) #'op_list':not considered delay operation list, 'CPD_list': BOCPD found CPD index list
+                if not self.sub_operation: # "False" if no sub-operation from last CPD point. (As only one sub-op applied for one ADF-test steady-state)
+                    check_point = max(self.CPD_list[-1], self.op_list[-1]) #'op_list':not considered delay operation index list, 'CPD_list': BOCPD found CPD index list
                     if (len(self.total_data) - check_point) >= self.Nw:  # There must be enough data after Op. or CPD. FIXME index issue
                         if adfuller(self.total_data[check_point:])[1] < 1e-6:  # Stable?
                             self._do_sub_operation()
@@ -253,11 +260,11 @@ class ToyMFB(object):
             else:
                 self._do_operation()  # SG-filter smoothing is not consider anomaly # FIXME
                 self.estimator = stats.gaussian_kde(self.window)  # Set Gaussian KDE for Abrupt CPD.   # FIXME : minimum of delay given, then calculate the estimator
-                self.status = 'DidOperation'
+                self.status = 'FBapplied'
                 return
 
-        # Waiting for results to be reflected.
-        if self.status == 'DidOperation':
+        # Waiting for FB to be applied.
+        if self.status == 'FBapplied':
             self._put_feature(feature)
             self.wait_num += 1 # FIXME index issue 
 
@@ -267,19 +274,19 @@ class ToyMFB(object):
                 self.abrupt_num += 1
 
             if self.wait_num >= self.Nomax:
-                self._run_MeanCPD_f()  # Mean CPD-f
+                self._run_CPD()  # CPD fired
                 self.bocd_f_ind_list.append(len(self.total_data))
                 self.wait_num = 1  # Reset self.wait_num
                 self.abrupt_num = 0  # Reset self.abrupt_num
-                self.status = 'Default'  # Reset self.status
+                self.status = 'noFBapplied'  # Reset self.status
                 return
 
             elif self.abrupt_num >= self.Nomin:
-                self._run_MeanCPD_f()  # Mean CPD-f
+                self._run_CPD()  # CPD fired
                 self.bocd_f_ind_list.append(len(self.total_data))
                 self.wait_num = 1  # Reset self.wait_num
                 self.abrupt_num = 0  # Reset self.abrupt_num
-                self.status = 'Default'  # Reset self.status
+                self.status = 'noFBapplied'  # Reset self.status
                 return
 
             else:
@@ -371,7 +378,7 @@ if __name__ == '__main__':
     import pandas as pd
 
     # Set test data
-    Data_temp = pd.read_csv("C:/Users/T5402/Downloads/n1_test_500k.txt", sep=',')
+    Data_temp = pd.read_csv("C:/Users/junho.lee/Desktop/Self_Code/GithubMFB/n1_test_500k.txt", sep=',')
 
     Pad_Temp = Data_temp[(Data_temp.Array_index == 1) & (Data_temp.Component_Name == 'R21')]
     PadOff_X = Pad_Temp.PAD_Length_offset / 1000.0
