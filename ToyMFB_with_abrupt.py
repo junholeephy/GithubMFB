@@ -47,16 +47,20 @@ def HotellingT2(window):
 
     return anomaly
 
-
-class ToyMFB(object):
-    def __init__(self, Nw=15, Nomin=3, Nomax=20, Nstd=15):
+class ToyMFB(object):    
+    def __init__(self, ARRAY_INDEX='UNKNOWN', REFERENCE='UNKNOWN',AXIS='UNKNOWN', Nw=15, Nomin=3, Nomax=20, Nstd=15):
         '''
-        :param Nw: window size to be check if smoothed line lies outside of calculated threshold
-        :param Nomin: min window size for waiting Mounter-FeedBack (MFB) applied due to delay
-        :param Nomax: max window size for waiting Mounter-FeedBack (MFB) applied due to delay
+        :param Nw: window size for outlier
+        :param Nomin: min window size for waiting Mounter-FeedBack (MFB) reflection
+        :param Nomax: max window size for waiting Mounter-FeedBack (MFB) reflection
         :param Nstd: window size for updating std.
         '''
-
+    
+        # Monitored Component
+        self.ARRAY_INDEX = ARRAY_INDEX
+        self.REFERENCE = REFERENCE
+        self.AXIS = AXIS
+        
         # status : two status considered i.e. 'noFBapplied' & 'FBapplied'
         self.status = 'noFBapplied'
 
@@ -94,8 +98,8 @@ class ToyMFB(object):
         self.delay = 0  # number of steps that have elapsed since the operation.
 
         # waiting step for reflection
-        self.wait_num = 1  # counting number for monitoring Mounter-FeedBack delay
-        self.abrupt_num = 1  # number counting low p-value point for Abrupt CPD
+        self.wait_num = 0  # counting number for monitoring Mounter-FeedBack delay
+        self.abrupt_num = 0  # number counting low p-value point for Abrupt CPD
         self.p = 0.05  # respective lower & upper p-value for Abrupt CPD
         self.estimator = None  # Gaussian KDE for Abrupt CPD => p-value calculated based on the Gaussian KDE regressed distribution
 
@@ -200,8 +204,8 @@ class ToyMFB(object):
         # Exclude anomaly before calculating offset by using Hotelling's T2
         windowForAnomaly = self.window
         anomaly = HotellingT2(windowForAnomaly)
-        for cnt, ind in enumerate(anomaly): # FIXME (cnt & ind ?)
-            del windowForAnomaly[ind - cnt] # windowForAnomaly : Anomaly excluded window 
+        for delete_ind, anomaly_ind in enumerate(anomaly):
+            del windowForAnomaly[anomaly_ind - delete_ind] # windowForAnomaly : Anomaly excluded window 
 
         # Calculate offset & operation
         offset = np.mean(windowForAnomaly)
@@ -223,8 +227,8 @@ class ToyMFB(object):
         # Exclude anomaly before calculating offset by using Hotelling's T2
         windowForAnomaly = self.total_data[max(self.CPD_list[-1], self.op_list[-1]):]
         anomaly = HotellingT2(windowForAnomaly)
-        for cnt, ind in enumerate(anomaly): # FIXME (cnt & ind ?)
-            del windowForAnomaly[ind - cnt] # windowForAnomaly : Anomaly excluded window
+        for delete_ind, anomaly_ind in enumerate(anomaly):
+            del windowForAnomaly[anomaly_ind - delete_ind] # windowForAnomaly : Anomaly excluded window 
 
         # Calculate offset & operation
         offset = np.mean(windowForAnomaly)
@@ -232,6 +236,7 @@ class ToyMFB(object):
 
         # Append sub-operation index
         self.sub_op_list.append(len(self.total_data))
+
 
 
     def step(self, feature):
@@ -245,7 +250,7 @@ class ToyMFB(object):
             self._put_feature(feature)
 
             # Enough data ?
-            if len(self.total_data) - self.CPD_list[-1] < self.Nw: #FIXME index issue
+            if len(self.total_data) - self.CPD_list[-1] < self.Nw: #FIXME index issue : DONE
                 return
 
             # Check if lies within calculated threshold. If not, do operation.
@@ -253,7 +258,7 @@ class ToyMFB(object):
                 # If state is on target & stable, do one sub-operation.
                 if not self.sub_operation: # "False" if no sub-operation from last CPD point. (As only one sub-op applied for one ADF-test steady-state)
                     check_point = max(self.CPD_list[-1], self.op_list[-1]) #'op_list':not considered delay operation index list, 'CPD_list': BOCPD found CPD index list
-                    if (len(self.total_data) - check_point) >= self.Nw:  # There must be enough data after Op. or CPD. FIXME index issue
+                    if (len(self.total_data) - check_point) >= self.Nw:  # There must be enough data after Op. or CPD. FIXME index issue : DONE
                         if adfuller(self.total_data[check_point:])[1] < 1e-6:  # Stable?
                             self._do_sub_operation()
                 return
@@ -266,7 +271,7 @@ class ToyMFB(object):
         # Waiting for FB to be applied.
         if self.status == 'FBapplied':
             self._put_feature(feature)
-            self.wait_num += 1 # FIXME index issue 
+            self.wait_num += 1 # FIXME index issue : DONE
 
             # Abrupt CPD : repeating low p-value point or waiting enough fires BOCD
             if self.estimator.integrate_box_1d(-np.Inf, self.total_data[-1]) < self.p or \
@@ -275,16 +280,16 @@ class ToyMFB(object):
 
             if self.wait_num >= self.Nomax:
                 self._run_CPD()  # CPD fired
-                self.bocd_f_ind_list.append(len(self.total_data))
-                self.wait_num = 1  # Reset self.wait_num
+                self.bocd_f_ind_list.append(len(self.total_data)-1)
+                self.wait_num = 0  # Reset self.wait_num
                 self.abrupt_num = 0  # Reset self.abrupt_num
                 self.status = 'noFBapplied'  # Reset self.status
                 return
 
             elif self.abrupt_num >= self.Nomin:
                 self._run_CPD()  # CPD fired
-                self.bocd_f_ind_list.append(len(self.total_data))
-                self.wait_num = 1  # Reset self.wait_num
+                self.bocd_f_ind_list.append(len(self.total_data)-1)
+                self.wait_num = 0  # Reset self.wait_num
                 self.abrupt_num = 0  # Reset self.abrupt_num
                 self.status = 'noFBapplied'  # Reset self.status
                 return
@@ -298,6 +303,10 @@ class ToyMFB(object):
         :return: None
         '''
         print('\n'+'='*40)
+        print('\n>> Component :')
+        print('\tArray Index : '+self.ARRAY_INDEX)
+        print('\tREFERENCE : '+self.REFERENCE)
+        print('\tAXIS : '+self.AXIS)
         print('\n>> Parameters :')
         print('\tNw =', self.Nw, ', Nomin =', self.Nomin, ', Nomax =', self.Nomax, ', Nstd =', self.Nstd)
         print('\tMean Delay =', self.mean_D)
@@ -313,6 +322,7 @@ class ToyMFB(object):
         # Plot total data & operation index & cp index
         fit, (ax1) = plt.subplots(nrows=2, ncols=1, figsize=(20, 8))
         ax1[0].grid(True)
+        ax1[0].set_title('Array Index : '+self.ARRAY_INDEX+'\nREFERENCE : '+self.REFERENCE+'\nAXIS : '+self.AXIS)
         for ind in self.op_list[1:]:
             ax1[0].axvline(ind, linestyle='--', color='g', linewidth=1)
         for ind in self.sub_op_list[1:]:
@@ -367,7 +377,7 @@ class ToyMFB(object):
             self.window_for_compare = savgol_result  ## compare threshold with sg-filter regressed line
 
         # Reset the threshold
-        if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:  ## FIXME index issue
+        if (len(self.total_data) - self.CPD_list[-1]) % self.Nstd == 0:  ## FIXME index issue : DONE
             buffer = self.total_data[-self.Nstd:]
             if 0.7 * self.offset_threshold > np.std(buffer) or self.offset_threshold < 0.7 * np.std(buffer):
                 self.offset_threshold = 0.7 * np.std(buffer)
