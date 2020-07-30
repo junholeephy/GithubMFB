@@ -19,7 +19,7 @@ def HotellingT2(window):
     :param window: data list
     :return: indexes of anomaly
     '''
-    alpha = 0.01
+    alpha = 0.01  #FIXME : must be larger value
     p = 1
     m = len(window)
     q = 2 * (m - 1) ** 2 / (3 * m - 4)
@@ -50,13 +50,16 @@ def HotellingT2(window):
 class ToyMFB(object):    
     def __init__(self, ARRAY_INDEX='UNKNOWN', REFERENCE='UNKNOWN',AXIS='UNKNOWN', Nw=15, Nomin=3, Nomax=20, Nstd=15):
         '''
+        :param ARRAY_INDEX: array index of component
+        :param REFERENCE: reference of component
+        :param AXIS: padoverhang axis
         :param Nw: window size for outlier
         :param Nomin: min window size for waiting Mounter-FeedBack (MFB) reflection
         :param Nomax: max window size for waiting Mounter-FeedBack (MFB) reflection
         :param Nstd: window size for updating std.
         '''
     
-        # Monitored Component
+        # Monitored Component (only used in plotting.)
         self.ARRAY_INDEX = ARRAY_INDEX
         self.REFERENCE = REFERENCE
         self.AXIS = AXIS
